@@ -244,7 +244,8 @@ class TorchModule(torch.nn.Module):
     def _tensor_to_dictionary(self, x: torch.Tensor):
         input_dict = {}
         # Handle both old format (..., n_features) and new format (..., n_features, 1)
-        if x.shape[-1] == 1:
+        # New format requires at least 3 dimensions with last dim == 1
+        if x.ndim >= 3 and x.shape[-1] == 1:
             # New scalar format: (..., n_features, 1)
             # Index the second-to-last dimension and keep trailing 1
             for idx, input_name in enumerate(self.input_order):

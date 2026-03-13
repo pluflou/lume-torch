@@ -1,9 +1,10 @@
 import os
 import pytest
 import yaml
+import torch
 
 from lume_torch.base import LUMETorch
-from lume_torch.variables import TorchScalarVariable
+from lume_torch.variables import TorchScalarVariable, TorchNDVariable
 
 
 class ExampleModel(LUMETorch):
@@ -134,3 +135,132 @@ class TestBaseModel:
         with pytest.raises(TypeError):
             output_dict[output_variables[0].name] = "test"
             example_model.output_validation(output_dict)
+
+    def test_output_validation_unknown_name_raises(self, simple_variables):
+        example_model = ExampleModel(**simple_variables)
+        output_variables = simple_variables["output_variables"]
+        with pytest.raises(ValueError, match="not found"):
+            example_model.output_validation(
+                {output_variables[0].name: 1.0, "nonexistent_output": 2.0}
+            )
+
+
+class TestValidateDictPerVariable:
+    """Tests for LUMETorch._validate_dict_per_variable — the shared unbatching helper."""
+
+    @pytest.fixture
+    def scalar_model(self, simple_variables):
+        return ExampleModel(**simple_variables)
+
+    @pytest.fixture
+    def nd_model(self):
+        input_vars = [TorchNDVariable(name="image", shape=(3, 4))]
+        output_vars = [TorchNDVariable(name="feat", shape=(2, 2))]
+        return ExampleModel(input_variables=input_vars, output_variables=output_vars)
+
+    @pytest.fixture
+    def readonly_model(self):
+        input_vars = [
+            TorchScalarVariable(name="fixed", default_value=1.0, read_only=True),
+            TorchScalarVariable(name="free", default_value=2.0),
+        ]
+        output_vars = [TorchScalarVariable(name="out")]
+        return ExampleModel(input_variables=input_vars, output_variables=output_vars)
+
+    def test_unknown_variable_name_raises(self, scalar_model, simple_variables):
+        input_variables = simple_variables["input_variables"]
+        with pytest.raises(ValueError, match="not found"):
+            scalar_model._validate_dict_per_variable(
+                {input_variables[0].name: 1.0, "does_not_exist": 2.0},
+                scalar_model.input_variables,
+                None,
+            )
+
+    def test_unbatched_scalar_passes(self, scalar_model, simple_variables):
+        input_variables = simple_variables["input_variables"]
+        scalar_model._validate_dict_per_variable(
+            {input_variables[0].name: torch.tensor(1.0)},
+            scalar_model.input_variables,
+            None,
+        )
+
+    def test_batched_scalar_tensor_validates(self, scalar_model, simple_variables):
+        input_variables = simple_variables["input_variables"]
+        # shape (N,) — batched scalar
+        scalar_model._validate_dict_per_variable(
+            {input_variables[0].name: torch.tensor([1.0, 2.0, 3.0])},
+            scalar_model.input_variables,
+            None,
+        )
+
+    def test_batched_scalar_wrong_type_raises(self, scalar_model, simple_variables):
+        input_variables = simple_variables["input_variables"]
+        # boolean tensor — invalid dtype for TorchScalarVariable (raises ValueError for dtype, TypeError for type)
+        with pytest.raises((TypeError, ValueError)):
+            scalar_model._validate_dict_per_variable(
+                {input_variables[0].name: torch.tensor([True, False])},
+                scalar_model.input_variables,
+                None,
+            )
+
+    def test_unbatched_nd_tensor_validates(self, nd_model):
+        nd_model._validate_dict_per_variable(
+            {"image": torch.zeros(3, 4)},
+            nd_model.input_variables,
+            None,
+        )
+
+    def test_batched_nd_tensor_validates(self, nd_model):
+        # shape (N, H, W) — batched ND tensor
+        nd_model._validate_dict_per_variable(
+            {"image": torch.zeros(5, 3, 4)},
+            nd_model.input_variables,
+            None,
+        )
+
+    def test_batched_nd_wrong_shape_raises(self, nd_model):
+        # Unbatched tensor with wrong shape (ndim == len(var.shape)) goes through
+        # validate_value directly and raises ValueError for shape mismatch.
+        with pytest.raises(ValueError, match="Expected shape"):
+            nd_model._validate_dict_per_variable(
+                {"image": torch.zeros(3, 99)},  # ndim=2 == len(shape), not batched
+                nd_model.input_variables,
+                None,
+            )
+
+    def test_batched_nd_wrong_dtype_raises(self, nd_model):
+        with pytest.raises(ValueError, match="Expected dtype"):
+            nd_model._validate_dict_per_variable(
+                {"image": torch.zeros(5, 3, 4, dtype=torch.float64)},
+                nd_model.input_variables,
+                None,
+            )
+
+    def test_read_only_batched_all_match(self, readonly_model):
+        # All batch elements equal the default — should pass
+        readonly_model._validate_dict_per_variable(
+            {
+                "fixed": torch.tensor([1.0, 1.0, 1.0]),
+                "free": torch.tensor([2.0, 3.0, 4.0]),
+            },
+            readonly_model.input_variables,
+            None,
+        )
+
+    def test_read_only_batched_mismatch_raises(self, readonly_model):
+        # One batch element differs from the default — should raise
+        with pytest.raises(ValueError, match="read-only"):
+            readonly_model._validate_dict_per_variable(
+                {"fixed": torch.tensor([1.0, 99.0]), "free": torch.tensor([2.0, 2.0])},
+                readonly_model.input_variables,
+                None,
+            )
+
+    def test_missing_variable_in_dict_is_skipped(self, scalar_model, simple_variables):
+        # Variables not present in data_dict are silently skipped
+        input_variables = simple_variables["input_variables"]
+        scalar_model._validate_dict_per_variable(
+            {input_variables[0].name: torch.tensor(1.0)},  # only one of two vars
+            scalar_model.input_variables,
+            None,
+        )

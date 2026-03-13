@@ -7,7 +7,7 @@ import torch
 from torch.distributions import Distribution as TDistribution
 
 from lume_torch.variables import DistributionVariable
-from lume_torch.models.utils import format_inputs, itemize_dict
+from lume_torch.models.utils import format_inputs
 from lume_torch.base import LUMETorch
 
 logger = logging.getLogger(__name__)
@@ -199,6 +199,10 @@ class ProbabilisticBaseModel(LUMETorch):
     def input_validation(self, input_dict: dict[str, Union[float, torch.Tensor]]):
         """Validates input dictionary before evaluation.
 
+        Unbatches values before delegating to variable-level validation,
+        since Variable classes expect single-sample values (no batch
+        dimensions).
+
         Parameters
         ----------
         input_dict : dict of str to float or torch.Tensor
@@ -211,7 +215,10 @@ class ProbabilisticBaseModel(LUMETorch):
 
         """
         # type/dtype check on raw user-provided values (before tensor conversion)
-        super().input_validation(input_dict)
+        # Unbatch for per-variable validation
+        self._validate_dict_per_variable(
+            input_dict, self.input_variables, self.input_validation_config
+        )
 
         # format inputs as tensors w/o changing the dtype
         formatted_inputs = format_inputs(input_dict.copy())
@@ -224,7 +231,10 @@ class ProbabilisticBaseModel(LUMETorch):
         return formatted_inputs
 
     def output_validation(self, output_dict: dict[str, TDistribution]):
-        """Itemizes tensors before performing output validation.
+        """Validates output distributions against output variable specifications.
+
+        Delegates to the shared ``_validate_dict_per_variable`` helper on
+        the base class, which handles unbatching and per-variable validation.
 
         Parameters
         ----------
@@ -232,9 +242,9 @@ class ProbabilisticBaseModel(LUMETorch):
             Output dictionary to validate.
 
         """
-        itemized_outputs = itemize_dict(output_dict)
-        for ele in itemized_outputs:
-            super().output_validation(ele)
+        self._validate_dict_per_variable(
+            output_dict, self.output_variables, self.output_validation_config
+        )
 
 
 class TorchDistributionWrapper(TDistribution):

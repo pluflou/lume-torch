@@ -79,11 +79,24 @@ class TestTorchModel:
         os.remove(f"{filename}_output_transformers_0.pt")
 
     def test_input_validation(self, california_test_input_dict: dict, california_model):
+        # california_test_input_dict contains batched scalar tensors shape (N,)
         california_model.input_validation(california_test_input_dict)
+
+    def test_input_validation_unknown_key_raises(self, california_model):
+        with pytest.raises(ValueError, match="not found"):
+            california_model.input_validation(
+                {"nonexistent_input": torch.tensor([1.0])}
+            )
 
     def test_output_validation(self, california_model):
         output_dict = {"MedHouseVal": torch.tensor([5.0, 3.1])}
         california_model.output_validation(output_dict)
+
+    def test_output_validation_unknown_key_raises(self, california_model):
+        with pytest.raises(ValueError, match="not found"):
+            california_model.output_validation(
+                {"nonexistent_output": torch.tensor([1.0])}
+            )
 
     def test_precision(self, california_model):
         assert california_model.precision == "double"

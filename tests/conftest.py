@@ -120,7 +120,6 @@ def california_test_input_tensor(rootdir: str):
             f"{rootdir}/test_files/california_regression/test_input_tensor.pt",
             weights_only=False,
         ).unsqueeze(-1)
-        print(f"Loaded test input tensor with shape {test_input_tensor.shape}")
     except FileNotFoundError as e:
         pytest.skip(str(e))
     return test_input_tensor
@@ -136,8 +135,6 @@ def california_test_input_dict(
         key: california_test_input_tensor[:, idx]
         for idx, key in enumerate(california_model_info["model_in_list"])
     }
-    for key, tensor in test_input_dict.items():
-        print(f"Test input for {key} has shape {tensor.shape}")
     return test_input_dict
 
 

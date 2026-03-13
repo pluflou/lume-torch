@@ -9,7 +9,7 @@ from botorch.models.transforms.input import ReversibleInputTransform
 
 from lume_torch.base import LUMETorch
 from lume_torch.variables import TorchScalarVariable, TorchNDVariable
-from lume_torch.models.utils import itemize_dict, format_inputs
+from lume_torch.models.utils import format_inputs
 
 
 logger = logging.getLogger(__name__)
@@ -337,7 +337,9 @@ class TorchModel(LUMETorch):
 
         """
         # type/dtype check on raw user-provided values (before tensor conversion)
-        super().input_validation(input_dict)
+        self._validate_dict_per_variable(
+            input_dict, self.input_variables, self.input_validation_config
+        )
 
         # format inputs as tensors w/o changing the dtype
         formatted_inputs = format_inputs(input_dict)
@@ -351,12 +353,18 @@ class TorchModel(LUMETorch):
         filled_inputs = self._fill_default_inputs(formatted_inputs)
 
         # range/bounds check on fully-prepared inputs (includes dynamic defaults)
-        super().input_validation(filled_inputs)
+        self._validate_dict_per_variable(
+            filled_inputs, self.input_variables, self.input_validation_config
+        )
 
         return filled_inputs
 
     def output_validation(self, output_dict: dict[str, Union[float, torch.Tensor]]):
         """Itemize tensors before performing output validation.
+
+        Variable classes expect single-sample values (no batch dimensions).
+        This method delegates to the shared ``_validate_dict_per_variable``
+        helper on the base class.
 
         Parameters
         ----------
@@ -364,15 +372,9 @@ class TorchModel(LUMETorch):
             Output dictionary to validate.
 
         """
-        for var in self.output_variables:
-            if isinstance(var, TorchNDVariable):
-                # run the validation for TorchNDVariable (arrays/images)
-                super().output_validation({var.name: output_dict[var.name]})
-            elif isinstance(var, TorchScalarVariable):
-                # itemize scalar tensors for element-wise validation
-                itemized_outputs = itemize_dict({var.name: output_dict[var.name]})
-                for ele in itemized_outputs:
-                    super().output_validation(ele)
+        self._validate_dict_per_variable(
+            output_dict, self.output_variables, self.output_validation_config
+        )
 
     def random_input(self, n_samples: int = 1) -> dict[str, torch.Tensor]:
         """Generates random input(s) for the model.

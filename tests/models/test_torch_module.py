@@ -105,6 +105,7 @@ class TestTorchModule:
         for param in lume_module._model.model.parameters():
             assert param.requires_grad
         assert len(parameters_with_requires_grad) == 8
+        print("original shape", california_test_input_tensor.shape)
         outputs = lume_module(california_test_input_tensor)
         loss = criterion(outputs, torch.zeros(outputs.shape, dtype=outputs.dtype))
         loss.backward()
@@ -181,6 +182,26 @@ class TestTorchModule:
 
         with pytest.raises(ValueError):
             lume_module(input_tensor)
+
+    def test_tensor_to_dictionary_2d_single_feature_uses_old_format(
+        self, california_test_input_tensor, california_model
+    ):
+        """Shape (B, 1) with 1 feature must use the old-format path (ndim < 3),
+        not the new scalar format, and produce the same output as shape (B, 1, 1)."""
+        lume_module = TorchModule(
+            model=california_model,
+            input_order=[california_model.input_names[0]],
+        )
+        # 2D old-format: (batch, n_features) = (3, 1) — ndim=2, last dim=1
+        input_2d = deepcopy(california_test_input_tensor[:, 0].unsqueeze(-1))  # (3, 1)
+        # 3D new-format: (batch, n_features, 1) = (3, 1, 1) — ndim=3
+        input_3d = input_2d.unsqueeze(-1)  # (3, 1, 1)
+
+        result_2d = lume_module(input_2d)
+        result_3d = lume_module(input_3d)
+
+        assert tuple(result_2d.shape) == (3,)
+        assert all(torch.isclose(result_2d, result_3d))
 
     def test_module_call_single_sample(
         self, california_test_input_tensor, california_module
