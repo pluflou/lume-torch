@@ -193,6 +193,18 @@ class TestValidateDictPerVariable:
             None,
         )
 
+    def test_batched_scalar_range_checks_every_sample_error(
+        self, scalar_model, simple_variables
+    ):
+        input_variables = simple_variables["input_variables"]
+        var_name = input_variables[0].name
+        with pytest.raises(ValueError, match="out of valid range"):
+            scalar_model._validate_dict_per_variable(
+                {var_name: torch.tensor([1.0, 99.0])},
+                scalar_model.input_variables,
+                {var_name: "error"},
+            )
+
     def test_batched_scalar_wrong_type_raises(self, scalar_model, simple_variables):
         input_variables = simple_variables["input_variables"]
         # boolean tensor — invalid dtype for TorchScalarVariable (raises ValueError for dtype, TypeError for type)
@@ -264,3 +276,24 @@ class TestValidateDictPerVariable:
             scalar_model.input_variables,
             None,
         )
+
+    def test_uses_variable_model_validation_hook(self, scalar_model, monkeypatch):
+        var = scalar_model.input_variables[0]
+        calls = []
+
+        def fake_validate_batched_value(self, value, config=None):
+            calls.append((value, config))
+
+        monkeypatch.setattr(
+            type(var), "validate_batched_value", fake_validate_batched_value
+        )
+
+        scalar_model._validate_dict_per_variable(
+            {var.name: torch.tensor([1.0, 2.0])},
+            scalar_model.input_variables,
+            {var.name: "warn"},
+        )
+
+        assert len(calls) == 1
+        assert torch.equal(calls[0][0], torch.tensor([1.0, 2.0]))
+        assert calls[0][1] == "warn"

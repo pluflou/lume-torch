@@ -583,23 +583,17 @@ class LUMETorch(BaseModel, ABC):
         variables: list,
         validation_config: Optional[dict[str, ConfigEnum]],
     ):
-        """Unbatch and validate each variable individually.
+        """Validate each variable using a variable-level model-validation hook.
 
-        Variable classes expect single-sample values (no batch dimensions).
-        This method strips batch dimensions before delegating to per-variable
-        validation via ``var.validate_value(sample, config=_config)``.
-
-        Both ND and scalar batched paths follow the same pattern:
-        1. Unbatch into individual samples (reshape for ND, flatten+index for scalar).
-        2. Validate dtype/type/range on the first sample via the public
-           ``validate_value`` API.
-        3. Validate read-only constraints on every sample individually via
-           ``_validate_read_only``.
+        Variables may implement ``validate_batched_value(value, config=...)`` to
+        handle batching/unbatching and per-sample read-only checks. If the hook
+        is absent, validation falls back to ``validate_value`` and optional
+        ``_validate_read_only`` for the provided value.
 
         Parameters
         ----------
         data_dict : dict of str to Any
-            Dictionary of variable names to (possibly batched) values.
+            Dictionary of variable names to values.
         variables : list
             List of variable objects to validate against.
         validation_config : dict of str to ConfigEnum or None
@@ -628,34 +622,14 @@ class LUMETorch(BaseModel, ABC):
                 None if validation_config is None else validation_config.get(var.name)
             )
 
-            # Determine whether the value is a batched tensor that needs
-            # to be unbatched before per-variable validation.
-            is_batched_nd = (
-                isinstance(var, TorchNDVariable)
-                and isinstance(value, torch.Tensor)
-                and value.ndim > len(var.shape)
-            )
-            is_batched_scalar = (
-                isinstance(var, TorchScalarVariable)
-                and isinstance(value, torch.Tensor)
-                and value.ndim > 0
-            )
+            validate_batched_value = getattr(var, "validate_batched_value", None)
+            if callable(validate_batched_value):
+                validate_batched_value(value, config=_config)
+                continue
 
-            if is_batched_nd or is_batched_scalar:
-                # Unbatch: reshape for ND tensors, flatten for scalars.
-                samples = (
-                    value.reshape(-1, *var.shape) if is_batched_nd else value.flatten()
-                )
-                # Validate dtype/type/range on first sample (uniform across batch)
-                var.validate_value(samples[0], config=_config)
-                # Validate read_only on every sample individually
-                if var.read_only:
-                    for s in samples:
-                        var._validate_read_only(s)
-            else:
-                var.validate_value(value, config=_config)
-                if hasattr(var, "_validate_read_only") and var.read_only:
-                    var._validate_read_only(value)
+            var.validate_value(value, config=_config)
+            if hasattr(var, "_validate_read_only") and var.read_only:
+                var._validate_read_only(value)
 
     def to_json(self, **kwargs) -> str:
         """Serializes the model to a JSON formatted string.

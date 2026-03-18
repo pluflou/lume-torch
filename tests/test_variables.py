@@ -182,6 +182,18 @@ class TestTorchScalarVariable:
         with pytest.raises(ValueError, match="Expected a 0D scalar tensor"):
             var.validate_value(torch.tensor([[5.0], [6.0]]))
 
+    def test_validate_batched_value_batched_checks_every_sample_error(self):
+        """Model-layer scalar validation should apply value-range checks to every sample."""
+        var = TorchScalarVariable(name="test", value_range=(0.0, 10.0))
+        with pytest.raises(ValueError, match="out of valid range"):
+            var.validate_batched_value(torch.tensor([1.0, 99.0]), config="error")
+
+    def test_validate_batched_value_batched_checks_every_sample_warn(self):
+        """Model-layer scalar validation should warn when a non-first sample is out of range."""
+        var = TorchScalarVariable(name="test", value_range=(0.0, 10.0))
+        with pytest.warns(UserWarning):
+            var.validate_batched_value(torch.tensor([1.0, 99.0]), config="warn")
+
     def test_validate_value_tensor_invalid_shape_raises(self):
         """Test that tensor with invalid shape raises ValueError."""
         var = TorchScalarVariable(name="test")

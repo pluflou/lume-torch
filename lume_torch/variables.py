@@ -6,7 +6,7 @@ but they can be used to validate encountered values.
 
 import logging
 import warnings
-from typing import Optional, Type, Union, ClassVar, List, Any, Self
+from typing import Optional, Type, Union, ClassVar, List, Any, Self, Iterable
 
 import torch
 from torch import Tensor
@@ -67,6 +67,55 @@ _STR_TO_TORCH_DTYPE: dict[str, "torch.dtype"] = {
 }
 
 
+def _validate_batched_value_from_samples(
+    var: Variable,
+    samples: Any,
+    *,
+    config: Optional[ConfigEnum] = None,
+    validate_every_sample: bool = False,
+) -> None:
+    """Apply model-layer validation using per-sample iteration contract.
+
+    Parameters
+    ----------
+    var : Variable
+        Variable instance used for value-level validation.
+    samples : Any
+        Iterable of unbatched validation samples.
+    config : ConfigEnum, optional
+        Optional validation strictness.
+    validate_every_sample : bool, optional
+        When True, run ``validate_value`` for each sample. When False,
+        run ``validate_value`` only for the first sample and rely on the
+        variable's structural checks to cover batch shape/type expectations.
+
+    """
+    if isinstance(samples, Tensor):
+        if samples.numel() == 0:
+            raise ValueError(f"Variable '{var.name}' received an empty batch.")
+
+        validation_samples = samples if validate_every_sample else samples[:1]
+        for sample in validation_samples:
+            var.validate_value(sample, config=config)
+
+        if getattr(var, "read_only", False) and hasattr(var, "_validate_read_only"):
+            for sample in samples:
+                var._validate_read_only(sample)
+        return
+
+    sample_list = list(samples)
+    if not sample_list:
+        raise ValueError(f"Variable '{var.name}' received an empty batch.")
+
+    validation_samples = sample_list if validate_every_sample else sample_list[:1]
+    for sample in validation_samples:
+        var.validate_value(sample, config=config)
+
+    if getattr(var, "read_only", False) and hasattr(var, "_validate_read_only"):
+        for sample in sample_list:
+            var._validate_read_only(sample)
+
+
 class DistributionVariable(Variable):
     """Variable for distributions. Must be a subclass of torch.distributions.Distribution.
 
@@ -113,6 +162,18 @@ class DistributionVariable(Variable):
                 f"Expected value to be of type {TDistribution}, "
                 f"but received {type(value)}."
             )
+
+    def iter_validation_samples(self, value: TDistribution) -> Iterable[TDistribution]:
+        """Return one unbatched sample for model-layer validation."""
+        return (value,)
+
+    def validate_batched_value(
+        self, value: TDistribution, config: Optional[ConfigEnum] = None
+    ) -> None:
+        """Batch-aware validation entry point."""
+        _validate_batched_value_from_samples(
+            self, self.iter_validation_samples(value), config=config
+        )
 
 
 class TorchScalarVariable(_BaseScalarVariable):
@@ -261,6 +322,23 @@ class TorchScalarVariable(_BaseScalarVariable):
                 f"Variable '{self.name}' is read-only and must equal its default value "
                 f"({expected_scalar}), but received {scalar_value}."
             )
+
+    def iter_validation_samples(self, value: Union[Tensor, float]) -> Any:
+        """Unbatch scalar tensors into 0D scalar samples."""
+        if isinstance(value, Tensor) and value.ndim > 0:
+            return value.flatten()
+        return (value,)
+
+    def validate_batched_value(
+        self, value: Union[Tensor, float], config: Optional[ConfigEnum] = None
+    ) -> None:
+        """Batch-aware validation entry point."""
+        _validate_batched_value_from_samples(
+            self,
+            self.iter_validation_samples(value),
+            config=config,
+            validate_every_sample=True,
+        )
 
 
 class TorchNDVariable(NDVariable):
@@ -477,6 +555,20 @@ class TorchNDVariable(NDVariable):
 
         """
         super().validate_value(value, config)
+
+    def iter_validation_samples(self, value: Tensor) -> Any:
+        """Unbatch ND tensors while preserving per-sample shape."""
+        if isinstance(value, Tensor) and value.ndim > len(self.shape):
+            return value.reshape(-1, *self.shape)
+        return (value,)
+
+    def validate_batched_value(
+        self, value: Tensor, config: Optional[ConfigEnum] = None
+    ) -> None:
+        """Batch-aware validation entry point."""
+        _validate_batched_value_from_samples(
+            self, self.iter_validation_samples(value), config=config
+        )
 
 
 # Alias TorchScalarVariable as ScalarVariable for backwards compatibility
