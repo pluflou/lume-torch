@@ -818,8 +818,8 @@ class TorchModel(LUMETorch):
                 else:
                     # 3D or higher dimensional - squeeze last dim if it's 1
                     # This handles multi-sample cases: (batch, samples, 1) -> (batch, samples)
-                    if output.shape[-1] == 1:
-                        parsed_outputs[self.output_names[0]] = output.squeeze(-1)
+                    if output.shape[-1] != 1:
+                        parsed_outputs[self.output_names[0]] = output.unsqueeze(-1)
                     else:
                         # Shouldn't happen, but handle by squeezing all and adding feature dim
                         parsed_outputs[self.output_names[0]] = (

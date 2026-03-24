@@ -146,14 +146,6 @@ class TestBaseModel:
             output_dict[output_variables[0].name] = "test"
             example_model.output_validation(output_dict)
 
-    def test_output_validation_unknown_name_raises(self, simple_variables):
-        example_model = ExampleModel(**simple_variables)
-        output_variables = simple_variables["output_variables"]
-        with pytest.raises(ValueError, match="not found"):
-            example_model.output_validation(
-                {output_variables[0].name: 1.0, "nonexistent_output": 2.0}
-            )
-
 
 class TestLUMETorchModel:
     """Test suite for LUMETorchModel wrapper class."""

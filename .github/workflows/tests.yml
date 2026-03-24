@@ -9,6 +9,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
@@ -29,7 +30,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install lume-torch
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra mlflow
 
       - name: List Python package versions
         run: uv pip list

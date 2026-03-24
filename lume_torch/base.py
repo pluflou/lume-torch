@@ -510,14 +510,29 @@ class LUMETorch(BaseModel, ABC):
 
     def evaluate(self, input_dict: dict[str, Any], **kwargs) -> dict[str, Any]:
         """Main evaluation function, child classes must implement the _evaluate method."""
+        self._validate_dict_keys(input_dict, dict_name="input")
         validated_input_dict = self.input_validation(input_dict)
         output_dict = self._evaluate(validated_input_dict, **kwargs)
+        self._validate_dict_keys(output_dict, dict_name="output")
         self.output_validation(output_dict)
         return output_dict
 
     @abstractmethod
     def _evaluate(self, input_dict: dict[str, Any], **kwargs) -> dict[str, Any]:
         pass
+
+    def _validate_dict_keys(self, in_dict, dict_name="input"):
+        """
+        Validates that the keys in the input dictionary are a subset of the valid variable names.
+        """
+        valid_keys = self.input_names if dict_name == "input" else self.output_names
+        valid_names = {name for name in valid_keys}
+        invalid_keys = set(in_dict.keys()) - valid_names
+        if invalid_keys:
+            raise ValueError(
+                f"Unknown {dict_name} variable(s): {sorted(invalid_keys)}. "
+                f"Valid variables are: {sorted(valid_names)}"
+            )
 
     def input_validation(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Validates input dictionary values against input variable specifications.
@@ -534,18 +549,14 @@ class LUMETorch(BaseModel, ABC):
 
         """
         for name, value in input_dict.items():
-            if name in self.input_names:
-                _config = (
-                    None
-                    if self.input_validation_config is None
-                    else self.input_validation_config.get(name)
-                )
-                var = self.input_variables[self.input_names.index(name)]
-                var.validate_value(value, config=_config)
-            else:
-                raise ValueError(
-                    f"Input variable {name} not found in model input variables."
-                )
+            _config = (
+                None
+                if self.input_validation_config is None
+                else self.input_validation_config.get(name)
+            )
+            var = self.input_variables[self.input_names.index(name)]
+            var.validate_value(value, config=_config)
+
         return input_dict
 
     def output_validation(self, output_dict: dict[str, Any]) -> dict[str, Any]:
@@ -568,10 +579,6 @@ class LUMETorch(BaseModel, ABC):
 
         """
         for name, value in output_dict.items():
-            if name not in self.output_names:
-                raise ValueError(
-                    f"Output variable {name} not found in model output variables."
-                )
             _config = (
                 None
                 if self.output_validation_config is None
