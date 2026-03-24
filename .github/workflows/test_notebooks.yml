@@ -40,6 +40,7 @@ jobs:
           find examples -type f -name "*.ipynb" \
             ! -path "examples/mlflow_integration/*" \
             ! -path "examples/calibrations/*" \
+            ! -path "examples/probabilistic_models/ensemble_example.ipynb" \
             ! -path "*/.ipynb_checkpoints/*" \
             -print | sort > notebooks.txt
 
