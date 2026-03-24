@@ -96,11 +96,6 @@ Wrapper for PyTorch neural networks.
             - get_device
             - get_dtype
 
-::: lume_torch.models.torch_model.InputDictModel
-    options:
-        show_root_heading: true
-        show_source: true
-
 #### Usage Example
 
 ```python
