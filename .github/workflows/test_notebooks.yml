@@ -1,0 +1,73 @@
+name: Test Notebooks
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  notebooks:
+    runs-on: ubuntu-latest
+    name: Notebook execution
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install project and notebook runtime
+        run: |
+          uv sync --extra dev
+          uv pip install nbconvert nbclient ipykernel
+
+      - name: Discover notebooks
+        id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Collect all notebooks under examples/, excluding known integration-only trees.
+          find examples -type f -name "*.ipynb" \
+            ! -path "examples/mlflow_integration/*" \
+            ! -path "examples/calibrations/*" \
+            ! -path "*/.ipynb_checkpoints/*" \
+            -print | sort > notebooks.txt
+
+          count=$(wc -l < notebooks.txt)
+          echo "Found $count notebook(s)."
+          cat notebooks.txt
+
+          if [ "$count" -eq 0 ]; then
+            echo "No notebooks matched selection. Failing to avoid silent pass."
+            exit 1
+          fi
+
+      - name: Execute notebooks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          status=0
+          while IFS= read -r notebook; do
+            echo "Running: $notebook"
+            if ! uv run python -m nbconvert \
+              --to notebook \
+              --execute \
+              --inplace \
+              --ExecutePreprocessor.timeout=1800 \
+              "$notebook"; then
+              status=1
+            fi
+          done < notebooks.txt
+
+          exit $status
