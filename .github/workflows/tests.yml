@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     name: Python ${{ matrix.python-version }}, ${{ matrix.os }} build
     steps:
@@ -36,8 +36,13 @@ jobs:
 
       - name: Run Tests
         run: |
+          uv run pytest -ra --pyargs tests -v | tee pytest-output.txt
+
+      - name: Add results to summary
+        if: always()
+        run: |
           echo -e '## Test results\n\n```' >> "$GITHUB_STEP_SUMMARY"
-          uv run pytest -ra --pyargs tests -v 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          cat pytest-output.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
   test-pypi-build:
