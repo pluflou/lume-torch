@@ -174,10 +174,34 @@ class TestTorchModule:
             model=california_model,
             input_order=[california_model.input_names[0]],
         )
-        input_tensor = deepcopy(california_test_input_tensor[:, 0])  # shape (3,)
+        # Create a 1D tensor by squeezing - this should fail validation
+        input_tensor = deepcopy(
+            california_test_input_tensor[:, 0].squeeze()
+        )  # shape (3,)
 
         with pytest.raises(ValueError):
             lume_module(input_tensor)
+
+    # TODO: check this test
+    def test_tensor_to_dictionary_2d_single_feature_uses_old_format(
+        self, california_test_input_tensor, california_model
+    ):
+        """Shape (B, 1) with 1 feature must use the old-format path (ndim < 3),
+        not the new scalar format, and produce the same output as shape (B, 1, 1)."""
+        lume_module = TorchModule(
+            model=california_model,
+            input_order=[california_model.input_names[0]],
+        )
+        # 2D old-format: (batch, n_features) = (3, 1) — ndim=2, last dim=1
+        input_2d = deepcopy(california_test_input_tensor[:, 0].unsqueeze(-1))  # (3, 1)
+        # 3D new-format: (batch, n_features, 1) = (3, 1, 1) — ndim=3
+        input_3d = input_2d.unsqueeze(-1)  # (3, 1, 1)
+
+        result_2d = lume_module(input_2d)
+        result_3d = lume_module(input_3d)
+
+        assert tuple(result_2d.shape) == (3,)
+        assert all(torch.isclose(result_2d, result_3d))
 
     def test_module_call_single_sample(
         self, california_test_input_tensor, california_module
@@ -255,19 +279,23 @@ class TestTorchModule:
     def test_module_call_batch_n_samples(
         self, california_test_input_tensor, california_module
     ):
-        # module should be able to handle input of shape [n_batch, n_samples, n_dim]
+        # module should be able to handle input of shape [n_batch, n_samples, n_features, 1]
         n_batch = 5
-        input_tensor = california_test_input_tensor.unsqueeze(0).repeat((n_batch, 1, 1))
+        input_tensor = california_test_input_tensor.unsqueeze(0).repeat(
+            (n_batch, 1, 1, 1)
+        )
         result = california_module(input_tensor)
 
         assert tuple(result.shape) == (n_batch, 3)
         for i in range(n_batch):
             assert_california_module_result(result[i])
 
+    # TODO: check dimensions
     def test_module_as_gp_prior_mean(
         self, california_test_input_tensor, california_module
     ):
-        train_x = california_test_input_tensor.double()
+        # Squeeze trailing dimension for BoTorch compatibility: (3, 8, 1) -> (3, 8)
+        train_x = california_test_input_tensor.squeeze(-1).double()
         train_y = california_module(train_x).unsqueeze(-1)
         with warnings.catch_warnings():
             warnings.simplefilter(

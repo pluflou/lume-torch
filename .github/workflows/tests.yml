@@ -9,9 +9,10 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     name: Python ${{ matrix.python-version }}, ${{ matrix.os }} build
     steps:
@@ -29,16 +30,13 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install lume-torch
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra mlflow
 
       - name: List Python package versions
         run: uv pip list
 
       - name: Run Tests
-        run: |
-          echo -e '## Test results\n\n```' >> "$GITHUB_STEP_SUMMARY"
-          uv run pytest -ra --pyargs tests -v 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+        run: uv run pytest -ra --pyargs tests -v
 
   test-pypi-build:
     runs-on: ubuntu-latest

@@ -7,10 +7,17 @@ from types import FunctionType, MethodType
 from io import TextIOWrapper
 
 import yaml
+import torch
 import numpy as np
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from lume_torch.variables import ScalarVariable, get_variable, ConfigEnum
+from lume_torch.variables import (
+    TorchScalarVariable,
+    get_variable,
+    ConfigEnum,
+    DistributionVariable,
+    TorchNDVariable,
+)
 from lume_torch.utils import (
     try_import_module,
     verify_unique_variable_names,
@@ -36,6 +43,7 @@ JSON_ENCODERS = {
     np.ndarray: lambda x: x.tolist(),
     np.int64: lambda x: int(x),
     np.float64: lambda x: float(x),
+    torch.Tensor: lambda x: x.tolist(),
 }
 
 
@@ -345,9 +353,9 @@ class LUMETorch(BaseModel, ABC):
 
     Attributes
     ----------
-    input_variables : list of ScalarVariable
+    input_variables : list of TorchScalarVariable
         List defining the input variables and their order.
-    output_variables : list of ScalarVariable
+    output_variables : list of TorchScalarVariable
         List defining the output variables and their order.
     input_validation_config : dict of str to ConfigEnum, optional
         Determines the behavior during input validation by specifying the validation
@@ -382,8 +390,10 @@ class LUMETorch(BaseModel, ABC):
 
     """
 
-    input_variables: list[ScalarVariable]
-    output_variables: list[ScalarVariable]
+    input_variables: list[Union[TorchScalarVariable, TorchNDVariable]]
+    output_variables: list[
+        Union[TorchScalarVariable, TorchNDVariable, DistributionVariable]
+    ]
     input_validation_config: Optional[dict[str, ConfigEnum]] = None
     output_validation_config: Optional[dict[str, ConfigEnum]] = None
 
@@ -400,7 +410,7 @@ class LUMETorch(BaseModel, ABC):
 
         Returns
         -------
-        list of ScalarVariable
+        list of TorchScalarVariable
             List of validated variable instances.
 
         Raises
@@ -415,7 +425,14 @@ class LUMETorch(BaseModel, ABC):
                 if isinstance(val, dict):
                     variable_class = get_variable(val["variable_class"])
                     new_value.append(variable_class(name=name, **val))
-                elif isinstance(val, ScalarVariable):
+                elif isinstance(
+                    val,
+                    (
+                        TorchScalarVariable,
+                        TorchNDVariable,
+                        DistributionVariable,
+                    ),
+                ):
                     new_value.append(val)
                 else:
                     raise TypeError(f"type {type(val)} not supported")
@@ -490,14 +507,29 @@ class LUMETorch(BaseModel, ABC):
 
     def evaluate(self, input_dict: dict[str, Any], **kwargs) -> dict[str, Any]:
         """Main evaluation function, child classes must implement the _evaluate method."""
+        self._validate_dict_keys(input_dict, dict_name="input")
         validated_input_dict = self.input_validation(input_dict)
         output_dict = self._evaluate(validated_input_dict, **kwargs)
+        self._validate_dict_keys(output_dict, dict_name="output")
         self.output_validation(output_dict)
         return output_dict
 
     @abstractmethod
     def _evaluate(self, input_dict: dict[str, Any], **kwargs) -> dict[str, Any]:
         pass
+
+    def _validate_dict_keys(self, in_dict, dict_name="input"):
+        """
+        Validates that the keys in the input dictionary are a subset of the valid variable names.
+        """
+        valid_keys = self.input_names if dict_name == "input" else self.output_names
+        valid_names = {name for name in valid_keys}
+        invalid_keys = set(in_dict.keys()) - valid_names
+        if invalid_keys:
+            raise ValueError(
+                f"Unknown {dict_name} variable(s): {sorted(invalid_keys)}. "
+                f"Valid variables are: {sorted(valid_names)}"
+            )
 
     def input_validation(self, input_dict: dict[str, Any]) -> dict[str, Any]:
         """Validates input dictionary values against input variable specifications.
@@ -515,12 +547,13 @@ class LUMETorch(BaseModel, ABC):
         """
         for name, value in input_dict.items():
             _config = (
-                "none"
+                None
                 if self.input_validation_config is None
                 else self.input_validation_config.get(name)
             )
             var = self.input_variables[self.input_names.index(name)]
             var.validate_value(value, config=_config)
+
         return input_dict
 
     def output_validation(self, output_dict: dict[str, Any]) -> dict[str, Any]:
@@ -535,6 +568,11 @@ class LUMETorch(BaseModel, ABC):
         -------
         dict of str to Any
             Validated output dictionary.
+
+        Raises
+        ------
+        ValueError
+            If ``output_dict`` contains a name not found in the model's output variables.
 
         """
         for name, value in output_dict.items():
@@ -700,7 +738,7 @@ class LUMETorch(BaseModel, ABC):
             return cls.from_yaml(file)
 
     @classmethod
-    def from_yaml(cls, yaml_obj: [str, TextIOWrapper]):
+    def from_yaml(cls, yaml_obj: str | TextIOWrapper):
         """Loads a model from a YAML string or file object.
 
         Parameters

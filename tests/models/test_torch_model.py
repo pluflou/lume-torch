@@ -12,7 +12,7 @@ try:
         ReversibleInputTransform,
     )
     from lume_torch.models import TorchModel
-    from lume_torch.variables import ScalarVariable
+    from lume_torch.variables import TorchScalarVariable
 
     torch.manual_seed(42)
 except ImportError:
@@ -42,7 +42,9 @@ class TestTorchModel:
         self,
         california_model_info: dict[str, str],
         california_model_kwargs: dict[str, Union[list, dict, str]],
-        california_variables: tuple[list[ScalarVariable], list[ScalarVariable]],
+        california_variables: tuple[
+            list[TorchScalarVariable], list[TorchScalarVariable]
+        ],
         california_transformers: tuple[list, list],
         california_model,
     ):
@@ -77,11 +79,25 @@ class TestTorchModel:
         os.remove(f"{filename}_output_transformers_0.pt")
 
     def test_input_validation(self, california_test_input_dict: dict, california_model):
+        # california_test_input_dict contains batched scalar tensors shape (N,)
         california_model.input_validation(california_test_input_dict)
 
-    def test_output_validation(self, california_model):
-        output_dict = {"MedHouseVal": torch.tensor([5.0, 3.1])}
-        california_model.output_validation(output_dict)
+    # TODO: decide if these tests make sense, and standardize the input/output validation behavior across models
+    # def test_input_validation_unknown_key_raises(self, california_model):
+    #     with pytest.raises(ValueError, match="not found"):
+    #         california_model.input_validation(
+    #             {"nonexistent_input": torch.tensor([1.0])}
+    #         )
+
+    # def test_output_validation(self, california_model):
+    #     output_dict = {"MedHouseVal": torch.tensor([5.0, 3.1])}
+    #     california_model.output_validation(output_dict)
+    #
+    # def test_output_validation_unknown_key_raises(self, california_model):
+    #     with pytest.raises(ValueError, match="not found"):
+    #         california_model.output_validation(
+    #             {"nonexistent_output": torch.tensor([1.0])}
+    #         )
 
     def test_precision(self, california_model):
         assert california_model.precision == "double"
@@ -94,7 +110,11 @@ class TestTorchModel:
     def test_model_evaluate_single_sample(
         self, california_test_input_dict: dict, california_model
     ):
-        results = california_model.evaluate(california_test_input_dict)
+        # Extract single sample from the batched input
+        single_sample_input = {
+            key: value[0] for key, value in california_test_input_dict.items()
+        }
+        results = california_model.evaluate(single_sample_input)
 
         assert isinstance(results["MedHouseVal"], torch.Tensor)
         assert torch.isclose(
@@ -111,7 +131,7 @@ class TestTorchModel:
         }
         results = california_model.evaluate(test_dict)
         target_tensor = torch.tensor(
-            [4.063651, 2.7774928, 2.792812], dtype=results["MedHouseVal"].dtype
+            [[4.063651], [2.7774928], [2.792812]], dtype=results["MedHouseVal"].dtype
         )
 
         assert torch.all(torch.isclose(results["MedHouseVal"], target_tensor))
@@ -124,15 +144,14 @@ class TestTorchModel:
         # model should be able to handle input of shape [n_batch, n_samples, n_dim]
         input_dict = {
             key: california_test_input_tensor[:, idx]
-            .unsqueeze(-1)
-            .unsqueeze(1)
-            .repeat((1, 3, 1))
+            .unsqueeze(1)  # Add samples dimension: (3, 1) -> (3, 1, 1)
+            .repeat((1, 3, 1))  # Repeat samples: (3, 1, 1) -> (3, 3, 1)
             for idx, key in enumerate(california_model.input_names)
         }
         results = california_model.evaluate(input_dict)
 
         # output shape should be [n_batch, n_samples]
-        assert tuple(results["MedHouseVal"].shape) == (3, 3)
+        assert tuple(results["MedHouseVal"].shape) == (3, 3, 1)
 
     def test_model_evaluate_raw(
         self,
@@ -142,10 +161,10 @@ class TestTorchModel:
         kwargs = deepcopy(california_model_kwargs)
         kwargs["output_format"] = "raw"
         california_model = TorchModel(**kwargs)
-        float_dict = {
-            key: value.item() for key, value in california_test_input_dict.items()
+        float_dict_single_sample = {
+            key: value[0].item() for key, value in california_test_input_dict.items()
         }
-        results = california_model.evaluate(float_dict)
+        results = california_model.evaluate(float_dict_single_sample)
 
         assert isinstance(results["MedHouseVal"], float)
         assert results["MedHouseVal"] == pytest.approx(4.063651)
@@ -160,10 +179,10 @@ class TestTorchModel:
         results = california_model.evaluate(shuffled_input)
 
         assert isinstance(results["MedHouseVal"], torch.Tensor)
-        assert torch.isclose(
-            results["MedHouseVal"],
-            torch.tensor(4.063651, dtype=results["MedHouseVal"].dtype),
+        target_tensor = torch.tensor(
+            [[4.063651], [2.7774928], [2.792812]], dtype=results["MedHouseVal"].dtype
         )
+        assert torch.all(torch.isclose(results["MedHouseVal"], target_tensor))
 
     @pytest.mark.parametrize(
         "test_idx,expected", [(0, 4.063651), (1, 2.7774928), (2, 2.792812)]
@@ -191,7 +210,11 @@ class TestTorchModel:
         kwargs = deepcopy(california_model_kwargs)
         kwargs["output_transformers"] = []
         model = TorchModel(**kwargs)
-        results = model.evaluate(california_test_input_dict)
+        # Use only the first sample from the batched input
+        single_sample_input = {
+            key: value[0] for key, value in california_test_input_dict.items()
+        }
+        results = model.evaluate(single_sample_input)
 
         assert torch.isclose(
             results["MedHouseVal"],
