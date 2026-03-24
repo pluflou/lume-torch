@@ -341,6 +341,7 @@ class TorchModel(LUMETorch):
             config = (
                 None
                 if self.input_validation_config is None
+                or var.name not in self.input_validation_config
                 else self.input_validation_config[var.name]
             )
             if var.name in input_dict:
@@ -376,6 +377,8 @@ class TorchModel(LUMETorch):
             config = (
                 None
                 if self.output_validation_config is None
+                or var.name not in self.output_validation_config
+                or self.output_validation_config[var.name] is None
                 else self.output_validation_config[var.name]
             )
             if var.name in output_dict:
