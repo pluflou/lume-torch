@@ -854,6 +854,7 @@ class LUMETorchModel(LUMEModel):
         self.torch_model = torch_model
         self._cache: dict[str, Any] = {}
         self._supported_variables = self._build_supported_variables()
+        self._initialized: bool = False
 
     def _build_supported_variables(self) -> dict[str, Variable]:
         """Build the supported-variables dict once.
@@ -874,6 +875,9 @@ class LUMETorchModel(LUMEModel):
         """
         Retrieve cached values for specified variables.
 
+        For read_only variables that are not yet in the cache,
+        returns the variable's default_value if available, otherwise logs a warning.
+
         Parameters
         ----------
         names : list[str]
@@ -887,48 +891,124 @@ class LUMETorchModel(LUMEModel):
         Raises
         ------
         KeyError
-            If a requested variable has not been set/computed yet.
+            If a requested settable (non-read_only) variable has not been set/computed yet.
         """
-        missing = [name for name in names if name not in self._cache]
-        if missing:
+        result = {}
+        missing_settable = []
+
+        for name in names:
+            if name in self._cache:
+                result[name] = self._cache[name]
+            else:
+                var = self._supported_variables.get(name)
+                if var is None:
+                    raise KeyError(f"Variable '{name}' is not a supported variable.")
+
+                if var.read_only:
+                    # For read_only variables, try to use default_value
+                    default_val = getattr(var, "default_value", None)
+                    if default_val is not None:
+                        result[name] = default_val
+                    else:
+                        logger.warning(
+                            f"Read-only variable '{name}' has no computed value and no default_value."
+                        )
+                else:
+                    missing_settable.append(name)
+
+        if missing_settable:
             raise KeyError(
-                f"Variables {missing} have not been computed yet. "
+                f"Variables {missing_settable} have not been set yet. "
                 f"Call set() with input values first."
             )
-        return {name: self._cache[name] for name in names}
+
+        return result
 
     def _set(self, values: dict[str, Any]) -> None:
         """
         Internal method to set input variables and evaluate the torch model.
 
+        On the first call, all input variables must be provided (or have default values).
+        On subsequent calls, only the values to update need to be passed; previously
+        cached values are reused for any inputs not explicitly provided.
+
+        Read-only variables cannot be set and will raise a ValueError.
+
         Parameters
         ----------
         values : dict[str, Any]
             Dictionary of variable names and values to set.
+
+        Raises
+        ------
+        ValueError
+            If any read_only variable names are passed in values.
+            If on first set, required input variables without defaults are missing.
         """
-        # Update cached inputs
-        self._cache.update(values)
+        # Check for read_only variables that cannot be set
+        read_only_names = [
+            name
+            for name in values
+            if name in self._supported_variables
+            and self._supported_variables[name].read_only
+        ]
+        if read_only_names:
+            raise ValueError(
+                f"Cannot set read-only variable(s): {sorted(read_only_names)}. "
+                f"Read-only variables are computed by the model and cannot be set directly."
+            )
 
-        # Build input dict from cache (allows partial updates)
+        # Build input dict for evaluation
         input_dict = {}
-        for name in self.torch_model.input_names:
-            if name in self._cache:
-                input_dict[name] = self._cache[name]
+        missing_required = []
 
-        # Evaluate even if not all required inputs are present
-        # Partial-input behavior is model-dependent:
-        # e.g., TorchModel will fill with defaults, GP model will raise an informative error
+        for name in self.torch_model.input_names:
+            if name in values:
+                # User provided this value
+                input_dict[name] = values[name]
+            elif self._initialized and name in self._cache:
+                # Subsequent set: reuse cached value
+                input_dict[name] = self._cache[name]
+            else:
+                # First set or not in cache: check for default
+                var = self._supported_variables.get(name)
+                default_val = getattr(var, "default_value", None) if var else None
+                if default_val is not None:
+                    input_dict[name] = default_val
+                else:
+                    missing_required.append(name)
+
+        if missing_required:
+            if not self._initialized:
+                raise ValueError(
+                    f"First set() requires all input variables. "
+                    f"Missing variables without defaults: {sorted(missing_required)}"
+                )
+            else:
+                raise ValueError(
+                    f"Missing required input variables: {sorted(missing_required)}"
+                )
+
+        # Update cache with input values
+        self._cache.update(input_dict)
+
+        # Evaluate the model
         output_dict = self.torch_model.evaluate(input_dict)
         self._cache.update(output_dict)
 
+        # Mark as initialized after successful first set
+        self._initialized = True
+
     def reset(self) -> None:
         """
-        Clear the input/output cache.
+        Clear the input/output cache and reset initialization state.
 
-        For stateless surrogate models, this simply clears the cached values.
-        The model itself has no internal state to reset.
+        For stateless surrogate models, this simply clears the cached values
+        and resets the initialization flag. The model itself has no internal
+        state to reset.
         """
         self._cache.clear()
+        self._initialized = False
 
     @property
     def supported_variables(self) -> dict[str, Variable]:

@@ -170,7 +170,7 @@ class TestLUMETorchModel:
             wrapper.get(["input1"])
 
         # Check the error message is helpful
-        assert "have not been computed yet" in str(exc_info.value)
+        assert "have not been set yet" in str(exc_info.value)
         assert "Call set()" in str(exc_info.value)
 
     def test_init_and_evaluate(self, simple_torch_model):
